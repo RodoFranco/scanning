@@ -3,61 +3,64 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Escáner de acceso</title>
-<script src="https://unpkg.com/html5-qrcode" defer></script>
-<script src="config.js"></script>
+<title>ESCÁNER DE ACCESO</title>
+<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 <style>
-body{font-family:Arial,sans-serif;background:#101828;color:#fff;margin:0}.wrap{max-width:700px;margin:auto;padding:20px}
-.card{background:#fff;color:#18212f;border-radius:16px;padding:18px;margin:15px 0}.ok{background:#ecfdf3;color:#027a48}.bad{background:#fff0f0;color:#b42318}
-input,button{width:100%;padding:12px;border-radius:9px;border:1px solid #ccd3dd;font-size:16px}button{background:#175cd3;color:#fff;border:0;font-weight:700;margin-top:10px}
-#reader{width:100%}.small{font-size:12px;color:#667085}.result{font-size:18px;font-weight:700}
+body{font-family:Arial,sans-serif;background:#111;color:#fff;margin:0;padding:18px}
+.wrap{max-width:650px;margin:auto}.card{background:#1d1d1d;border-radius:16px;padding:18px;margin-bottom:15px}
+input,button{width:100%;padding:13px;border-radius:9px;border:0;margin-top:8px;font-size:16px}
+button{font-weight:bold;cursor:pointer}.ok{background:#0a7b28}.bad{background:#b00020}
+#reader{background:#fff;border-radius:12px;overflow:hidden;margin-top:15px}
+#result{font-size:22px;font-weight:800;text-align:center;padding:18px;border-radius:12px;background:#333}
+.small{opacity:.8;font-size:13px}
 </style>
 </head>
-<body><div class="wrap">
+<body>
+<div class="wrap">
+<div class="card">
 <h1>ESCÁNER DE ACCESO</h1>
-<div class="card"><label>Identificador de este celular</label><input id="device" placeholder="Ej. CELULAR-01"></div>
-<div class="card"><div id="reader"></div></div>
-<div id="out" class="card">Listo para escanear.</div>
+<p class="small">Cada teléfono debe tener un identificador distinto.</p>
+<input id="device" placeholder="Ejemplo: CELULAR-01">
+<button onclick="start()">INICIAR CÁMARA</button>
 </div>
+<div class="card"><div id="reader"></div><div id="result">ESPERANDO QR...</div></div>
+</div>
+<script src="config.js"></script>
 <script>
-let last='';
-function show(cls,msg){out.className='card '+cls;out.innerHTML=msg}
-function parseVCard(t){
- const fol=(t.match(/X-REG-FOLIO:([^\r\n]+)/i)||[])[1];
- const sig=(t.match(/X-REG-SIG:([^\r\n]+)/i)||[])[1];
- if(!fol||!sig) throw new Error('QR sin folio/firma de acceso.');
- return {folio:fol.trim(),sig:sig.trim()};
+let scanner=null,busy=false;
+function setResult(text,ok){const e=document.getElementById('result');e.textContent=text;e.className=ok?'ok':'bad'}
+function extract(text){
+  const folio=(text.match(/X-REG-FOLIO[:=]([A-Za-z0-9_-]+)/)||text.match(/FOLIO=([A-Za-z0-9_-]+)/)||[])[1]||'';
+  const sig=(text.match(/X-REG-SIG[:=]([A-Za-z0-9_-]+)/)||[])[1]||'';
+  return {folio,sig};
 }
-async function send(folio,sig){
- if(folio===last){show('bad','Doble lectura local bloqueada.');return}
- last=folio;
- const device=(document.getElementById('device').value||'SIN_IDENTIFICAR').trim().toUpperCase();
- const callback='scanCallback_'+Date.now();
- const url=APPS_SCRIPT_URL+'?action=scan&folio='+encodeURIComponent(folio)+'&sig='+encodeURIComponent(sig)+'&device='+encodeURIComponent(device)+'&callback='+callback;
- try{
-  const j=await jsonp(url,callback);
-  if(j.ok) show('ok','<div class="result">INGRESO REGISTRADO</div><br>'+esc(j.nombre)+'<br>'+esc(j.empresa)+'<br>'+new Date(j.hora).toLocaleString());
-  else show('bad',esc(j.error||'No autorizado.'));
- }catch(e){show('bad','No se pudo contactar al servidor. '+esc(e.message))}
- setTimeout(()=>last='',5000);
+async function start(){
+  const id=document.getElementById('device').value.trim().toUpperCase();
+  if(!id){alert('Escribe el ID del celular.');return}
+  localStorage.setItem('scannerDevice',id);
+  if(scanner)return;
+  scanner=new Html5Qrcode('reader');
+  try{
+    await scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:260,height:260}},onScan);
+    setResult('CÁMARA ACTIVA — ESPERANDO QR...',true);
+  }catch(e){setResult('NO SE PUDO ABRIR LA CÁMARA: '+e,false)}
 }
-function jsonp(url,callback){
- return new Promise((resolve,reject)=>{
-  const script=document.createElement('script');
-  const timer=setTimeout(()=>{cleanup();reject(new Error('Tiempo de espera agotado.'))},12000);
-  window[callback]=(data)=>{cleanup();resolve(data)};
-  function cleanup(){clearTimeout(timer);delete window[callback];script.remove()}
-  script.onerror=()=>{cleanup();reject(new Error('No se pudo conectar con Apps Script.'))};
-  script.src=url;document.body.appendChild(script);
- });
+function onScan(decoded){
+  if(busy)return;
+  const x=extract(decoded);
+  if(!x.folio||!x.sig){setResult('QR NO RECONOCIDO',false);return}
+  busy=true; setResult('VALIDANDO...',true);
+  const cb='cb_'+Date.now();
+  window[cb]=function(d){
+    delete window[cb]; busy=false;
+    if(d.ok){setResult('✓ '+d.message+' — '+d.nombre+' — '+(d.acceso||''),true)}
+    else{setResult('✕ '+d.message,false)}
+    setTimeout(()=>{if(document.getElementById('result'))document.getElementById('result').textContent='ESPERANDO QR...'},3500);
+  };
+  const url=APPS_SCRIPT_URL+'?action=scan&folio='+encodeURIComponent(x.folio)+'&sig='+encodeURIComponent(x.sig)+'&scannerId='+encodeURIComponent(localStorage.getItem('scannerDevice')||'SIN-ID')+'&callback='+cb+'&_='+Date.now();
+  const s=document.createElement('script');s.src=url;s.onerror=function(){delete window[cb];busy=false;setResult('ERROR DE CONEXIÓN CON GOOGLE APPS SCRIPT',false)};document.body.appendChild(s);
 }
-function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-window.addEventListener('load',()=>{
- if(typeof Html5Qrcode==='undefined'){show('bad','No cargó el lector QR. Revisa internet.');return}
- const scanner=new Html5Qrcode('reader');
- scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:250,height:250}},decoded=>{
-  try{const x=parseVCard(decoded);send(x.folio,x.sig)}catch(e){show('bad',esc(e.message))}
- }).catch(e=>show('bad','No se pudo iniciar la cámara: '+esc(e)));
-});
+document.getElementById('device').value=localStorage.getItem('scannerDevice')||'';
 </script>
-</body></html>
+</body>
+</html>
