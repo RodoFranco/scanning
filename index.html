@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Escáner de acceso</title>
+<script src="https://unpkg.com/html5-qrcode" defer></script>
+<script src="config.js"></script>
+<style>
+body{font-family:Arial,sans-serif;background:#101828;color:#fff;margin:0}.wrap{max-width:700px;margin:auto;padding:20px}
+.card{background:#fff;color:#18212f;border-radius:16px;padding:18px;margin:15px 0}.ok{background:#ecfdf3;color:#027a48}.bad{background:#fff0f0;color:#b42318}
+input,button{width:100%;padding:12px;border-radius:9px;border:1px solid #ccd3dd;font-size:16px}button{background:#175cd3;color:#fff;border:0;font-weight:700;margin-top:10px}
+#reader{width:100%}.small{font-size:12px;color:#667085}.result{font-size:18px;font-weight:700}
+</style>
+</head>
+<body><div class="wrap">
+<h1>ESCÁNER DE ACCESO</h1>
+<div class="card"><label>Identificador de este celular</label><input id="device" placeholder="Ej. CELULAR-01"></div>
+<div class="card"><div id="reader"></div></div>
+<div id="out" class="card">Listo para escanear.</div>
+</div>
+<script>
+let last='';
+function show(cls,msg){out.className='card '+cls;out.innerHTML=msg}
+function parseVCard(t){
+ const fol=(t.match(/X-REG-FOLIO:([^\r\n]+)/i)||[])[1];
+ const sig=(t.match(/X-REG-SIG:([^\r\n]+)/i)||[])[1];
+ if(!fol||!sig) throw new Error('QR sin folio/firma de acceso.');
+ return {folio:fol.trim(),sig:sig.trim()};
+}
+async function send(folio,sig){
+ if(folio===last){show('bad','Doble lectura local bloqueada.');return}
+ last=folio;
+ const device=(document.getElementById('device').value||'SIN_IDENTIFICAR').trim().toUpperCase();
+ const callback='scanCallback_'+Date.now();
+ const url=APPS_SCRIPT_URL+'?action=scan&folio='+encodeURIComponent(folio)+'&sig='+encodeURIComponent(sig)+'&device='+encodeURIComponent(device)+'&callback='+callback;
+ try{
+  const j=await jsonp(url,callback);
+  if(j.ok) show('ok','<div class="result">INGRESO REGISTRADO</div><br>'+esc(j.nombre)+'<br>'+esc(j.empresa)+'<br>'+new Date(j.hora).toLocaleString());
+  else show('bad',esc(j.error||'No autorizado.'));
+ }catch(e){show('bad','No se pudo contactar al servidor. '+esc(e.message))}
+ setTimeout(()=>last='',5000);
+}
+function jsonp(url,callback){
+ return new Promise((resolve,reject)=>{
+  const script=document.createElement('script');
+  const timer=setTimeout(()=>{cleanup();reject(new Error('Tiempo de espera agotado.'))},12000);
+  window[callback]=(data)=>{cleanup();resolve(data)};
+  function cleanup(){clearTimeout(timer);delete window[callback];script.remove()}
+  script.onerror=()=>{cleanup();reject(new Error('No se pudo conectar con Apps Script.'))};
+  script.src=url;document.body.appendChild(script);
+ });
+}
+function esc(s){return String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+window.addEventListener('load',()=>{
+ if(typeof Html5Qrcode==='undefined'){show('bad','No cargó el lector QR. Revisa internet.');return}
+ const scanner=new Html5Qrcode('reader');
+ scanner.start({facingMode:'environment'},{fps:10,qrbox:{width:250,height:250}},decoded=>{
+  try{const x=parseVCard(decoded);send(x.folio,x.sig)}catch(e){show('bad',esc(e.message))}
+ }).catch(e=>show('bad','No se pudo iniciar la cámara: '+esc(e)));
+});
+</script>
+</body></html>
